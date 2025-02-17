@@ -2,7 +2,7 @@
 # Stock Market Analysis System
 # This system provides functionality for downloading, analyzing, and visualizing Chinese A-share stock data
 # Author: Joshua Mao
-# Create Date: 02-17-2025
+# Date: 02-17-2025
 
 How to use the Stock Analysis System:
 
