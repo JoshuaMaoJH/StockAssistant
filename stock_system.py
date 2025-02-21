@@ -100,7 +100,7 @@ class StockDownloader:
             filepath = os.path.join(self.folder, f'{stock_code}_{stock_name}_{start_date}_{end_date}.csv')
 
             # Verify data completeness
-            if not self.check_stock_data_files(stock_data):
+            if not self.check_stock_data_files(stock_data, stock_code):
                 return
 
             stock_data.to_csv(filepath, index=False, encoding='utf-8')
@@ -145,15 +145,16 @@ class StockDownloader:
         GB = MB / 1024
         return files, round(B, 2), round(KB, 2), round(MB, 2), round(GB, 2)
 
-    def check_stock_data_files(self, stock_data):
+    def check_stock_data_files(self, stock_data, stock_code):
         """
-        Verify completeness and validity of stock data.
+        Verify completeness and validity of stock data, including ST/delisting check.
 
         Args:
             stock_data (pandas.DataFrame): Stock data to verify
+            stock_code (str): Stock code to check against ST/delisting status
 
         Returns:
-            bool: True if data is complete and valid, False otherwise
+            bool: True if data is complete and valid (not ST/delisted), False otherwise
         """
         if stock_data is None or stock_data.empty:
             return False
@@ -170,14 +171,19 @@ class StockDownloader:
             "涨跌幅",  # Change Ratio
             "涨跌额",  # Change Amount
             "换手率",  # Turnover Rate
-            "股票代码",  # Stock Code
         ]
 
+        # Check for required columns and no null values
         for column in check_columns:
             if column not in stock_data.columns:
                 return False
             if stock_data[column].isnull().sum() > 0:
                 return False
+
+        # Check if it's an ST stock or delisted stock using the stock name from self.stocks
+        stock_name = self.stocks.get(stock_code, "")
+        if 'ST' in stock_name or '退' in stock_name:
+            return False
 
         return True
 
