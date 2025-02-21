@@ -37,6 +37,12 @@ class StockDownloader:
         self.stocks = self.get_all_stocks()
         self.folder = 'stock_data'
 
+    def have_folder(self, folder):
+        return os.path.exists(folder)
+
+    def make_folder(self, folder):
+        os.makedirs(folder)
+
     def get_all_stocks(self):
         """
         Retrieve a list of all available A-share stocks.
@@ -87,8 +93,8 @@ class StockDownloader:
             start_date (str): Start date
             end_date (str): End date
         """
-        if not os.path.exists(self.folder):
-            os.makedirs(self.folder)
+        if not self.have_folder(self.folder):
+            self.make_folder(self.folder)
 
         try:
             filepath = os.path.join(self.folder, f'{stock_code}_{stock_name}_{start_date}_{end_date}.csv')
@@ -344,7 +350,7 @@ class StockSystem:
         Initialize the stock system by creating instances of StockDownloader and StockLineDrawer.
         """
         self.downloader = StockDownloader()
-        self.lineDrawer = StockLineDrawer(self.downloader)
+        self.line_drawer = StockLineDrawer(self.downloader)
 
 
 # Usage Guide
@@ -393,9 +399,9 @@ Note: This system requires the following packages:
 
 
 if __name__ == '__main__':
-    print("=== Example ===")
+    print("=== Easy Example ===")
     stockSystem = StockSystem()
     stockSystem.downloader.download_all_stocks()
-    stockSystem.lineDrawer.draw_single_stock_kline('000001')
-    stockSystem.lineDrawer.draw_single_stock_ma([5, 10, 20], '000001')
-    stockSystem.lineDrawer.draw_single_stock_trends('000001')
+    stockSystem.line_drawer.draw_single_stock_kline('000001')
+    stockSystem.line_drawer.draw_single_stock_ma([5, 10, 20], '000001')
+    stockSystem.line_drawer.draw_single_stock_trends('000001')
