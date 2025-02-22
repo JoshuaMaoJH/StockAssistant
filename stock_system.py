@@ -2,7 +2,7 @@
 # This system provides functionality for downloading, analyzing, and visualizing Chinese A-share stock data
 # Author: Joshua Mao
 # Date: 02-22-2025
-# Version: 0.0.2
+# Version: 0.0.6
 
 import akshare as ak
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,6 +11,173 @@ from tqdm import tqdm
 import os
 from datetime import datetime
 import matplotlib.pyplot as plt
+import logging
+
+
+class StockDataError(Exception):
+    """Custom exception for stock data related errors"""
+    pass
+
+
+class StockAnalysisSystem:
+    def __init__(self, downloader):
+        self.downloader = downloader
+
+    def is_stock_limit_up(self, stock_code, day):
+        """检查股票是否涨停"""
+        try:
+            close_price = self.get_closing_price(stock_code, day)
+            open_price = self.get_opening_price(stock_code, day)
+            increase = self.get_increase(stock_code, day)
+
+            # 检查返回值
+            if isinstance(close_price, Exception) or isinstance(open_price, Exception) or isinstance(increase,
+                                                                                                     Exception):
+                return False
+
+            return float(close_price) >= float(open_price) and float(increase) >= 0
+        except Exception as e:
+            logging.error(f"Error checking limit up for {stock_code}: {str(e)}")
+            return False
+
+    def get_increase(self, stock_code, day):
+        """获取股票某日的涨跌幅"""
+        try:
+            close_price = self.get_closing_price(stock_code, day)
+            open_price = self.get_opening_price(stock_code, day)
+
+            # 检查是否返回了异常
+            if isinstance(close_price, Exception) or isinstance(open_price, Exception):
+                return 0
+
+            return float(close_price) - float(open_price)
+        except Exception as e:
+            logging.error(f"Error calculating increase for {stock_code}: {str(e)}")
+            return 0
+
+    def get_closing_price(self, stock_code, day):
+        """获取收盘价"""
+        try:
+            # 获取当天数据
+            day_data = self.get_date_data(stock_code, day)
+            if isinstance(day_data, Exception):
+                logging.error(f"Error getting data for {stock_code}: {day_data}")
+                return None
+
+            # 直接返回收盘价，因为day_data['收盘']已经是具体的值
+            return float(day_data['收盘'])
+        except Exception as e:
+            logging.error(f"Error getting closing price for {stock_code}: {e}")
+            return None
+
+    def get_opening_price(self, stock_code, day):
+        """获取开盘价"""
+        try:
+            day_data = self.get_date_data(stock_code, day)
+            if isinstance(day_data, Exception):
+                logging.error(f"Error getting data for {stock_code}: {day_data}")
+                return None
+
+            # 直接返回开盘价
+            return float(day_data['开盘'])
+        except Exception as e:
+            logging.error(f"Error getting opening price for {stock_code}: {e}")
+            return None
+
+    def get_date_data(self, stock_code, day='2022-01-01'):
+        """获取指定日期的股票数据"""
+        try:
+            stock_data = self.downloader.read_csv(
+                f'{self.downloader.folder}/{stock_code}_{self.downloader.stocks[stock_code]}_{self.downloader.start_date}_{self.downloader.end_date}.csv')
+            stock_data.index = stock_data['日期']
+            return stock_data.loc[day]
+        except Exception as e:
+            logging.error(f"Error getting date data for {stock_code}: {e}")
+            return e
+
+    def analyze_stock(self, stock_code):
+        """分析单个股票"""
+        try:
+            # 读取数据
+            file_path = f'{self.downloader.folder}/{stock_code}_{self.downloader.stocks[stock_code]}_{self.downloader.start_date}_{self.downloader.end_date}.csv'
+            stock_data = self.downloader.read_csv(file_path)
+
+            # 获取最近的交易日数据
+            last_day_date = str(stock_data['日期'].values[-2])
+            this_day_date = str(stock_data['日期'].values[-1])
+
+            # 获取价格数据并检查有效性
+            last_close = self.get_closing_price(stock_code, last_day_date)
+            this_close = self.get_closing_price(stock_code, this_day_date)
+
+            # 如果任何价格数据无效，返回False
+            if last_close is None or this_close is None:
+                return False, {}
+
+            # 计算涨跌幅
+            increase_rate = ((this_close - last_close) / last_close) * 100
+
+            # 获取成交量数据
+            try:
+                last_volume = float(stock_data['成交量'].values[-2])
+                this_volume = float(stock_data['成交量'].values[-1])
+                is_volume_up = this_volume > last_volume
+            except (IndexError, ValueError, TypeError):
+                is_volume_up = False
+
+            # 判断趋势
+            is_uptrend = this_close > last_close
+
+            # 返回分析结果
+            analysis_result = {
+                'date': this_day_date,
+                'stock_name': self.downloader.stocks[stock_code],
+                'close_price': this_close,
+                'increase_rate': round(increase_rate, 2),
+                'is_uptrend': is_uptrend,
+                'is_volume_up': is_volume_up
+            }
+
+            # 定义筛选条件
+            is_interesting = (
+                    is_uptrend and
+                    is_volume_up and
+                    increase_rate > 2.0
+            )
+
+            is_interesting = (self.get_increase(stock_code, this_day_date) > self.get_increase(stock_code, last_day_date)
+                              and self.is_stock_limit_up(stock_code, this_day_date) and self.is_stock_limit_up(stock_code, last_day_date)
+                              and is_interesting)
+
+            return is_interesting, analysis_result
+
+        except Exception as e:
+            logging.error(f"Error analyzing stock {stock_code}: {e}")
+            return False, {}
+
+    def analyze_all_stocks(self):
+        """分析所有股票并返回符合条件的结果"""
+        results = {}
+        interesting_stocks = {}
+
+        with ThreadPoolExecutor(max_workers=self.downloader.max_workers) as executor:
+            with tqdm(total=len(self.downloader.stocks), desc='ANALYSIS PROGRESS', unit='stock(s)') as pbar:
+                futures = {
+                    executor.submit(self.analyze_stock, stock_code): stock_code
+                    for stock_code in self.downloader.stocks.keys()
+                }
+
+                for future in as_completed(futures):
+                    stock_code = futures[future]
+                    try:
+                        is_interesting, analysis = future.result()
+                        if is_interesting:
+                            interesting_stocks[stock_code] = analysis
+                    except Exception as e:
+                        logging.error(f"Error processing {stock_code}: {e}")
+                    pbar.update(1)
+
+        return interesting_stocks
 
 
 class StockDownloader:
@@ -37,6 +204,9 @@ class StockDownloader:
         self.max_workers = 10
         self.stocks = self.get_all_stocks()
         self.folder = 'stock_data'
+
+    def read_csv(self, file_path):
+        return pd.read_csv(file_path)
 
     def have_folder(self, folder):
         return os.path.exists(folder)
@@ -358,6 +528,7 @@ class StockSystem:
         """
         self.downloader = StockDownloader()
         self.line_drawer = StockLineDrawer(self.downloader)
+        self.analysis_system = StockAnalysisSystem(self.downloader)
 
 
 # Usage Guide
@@ -404,11 +575,34 @@ Note: This system requires the following packages:
 - tqdm
 """
 
-
 if __name__ == '__main__':
-    print("=== Easy Example ===")
-    stockSystem = StockSystem()
-    stockSystem.downloader.download_all_stocks()
-    stockSystem.line_drawer.draw_single_stock_kline('000001')
-    stockSystem.line_drawer.draw_single_stock_ma([5, 10, 20], '000001')
-    stockSystem.line_drawer.draw_single_stock_trends('000001')
+    print("=== Stock Analysis Example ===")
+
+    # 设置日志
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+    stock_system = StockSystem()
+    stock_system.downloader.max_workers = 25
+    stock_system.downloader.start_date = '20220101'
+    stock_system.downloader.end_date = '20250217'
+
+    # 下载数据
+    print("Downloading stock data...")
+    stock_system.downloader.download_all_stocks()
+
+    # 分析股票
+    print("\nAnalyzing stocks...")
+    interesting_stocks = stock_system.analysis_system.analyze_all_stocks()
+
+    # 输出分析结果
+    print("\n=== Analysis Results ===")
+    if interesting_stocks:
+        print(f"Found {len(interesting_stocks)} interesting stocks:")
+        for stock_code, analysis in interesting_stocks.items():
+            print(f"\n{analysis['stock_name']} ({stock_code}):")
+            print(f"  日期: {analysis['date']}")
+            print(f"  收盘价: {analysis['close_price']:.2f}")
+            print(f"  涨跌幅: {analysis['increase_rate']}%")
+            print(f"  成交量增加: {'是' if analysis['is_volume_up'] else '否'}")
+    else:
+        print("No stocks matching the criteria found.")
