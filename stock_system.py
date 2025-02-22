@@ -1,7 +1,8 @@
 # Stock Market Analysis System
 # This system provides functionality for downloading, analyzing, and visualizing Chinese A-share stock data
 # Author: Joshua Mao
-# Date: 02-17-2025
+# Date: 02-22-2025
+# Version: 1.0.1
 
 import akshare as ak
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -123,7 +124,7 @@ class StockDownloader:
         Shows a progress bar during download.
         """
         with ThreadPoolExecutor(self.max_workers) as executor:
-            with tqdm(total=len(self.stocks), desc='DOWNLOAD PROGRESS') as pbar:
+            with tqdm(total=len(self.stocks), desc='DOWNLOAD PROGRESS', unit='stock(s)') as pbar:
                 futures = [executor.submit(self.download_single_stock, stock_code) for stock_code in self.stocks.keys()]
                 for future in as_completed(futures):
                     pbar.update(1)
