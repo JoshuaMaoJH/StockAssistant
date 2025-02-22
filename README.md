@@ -1,36 +1,39 @@
-# Chinese A-Share Stock Analysis System
+# Chinese A-Share Market Analysis System
 
-A comprehensive Python-based system for downloading, analyzing, and visualizing Chinese A-share stock market data. This system provides tools for batch downloading stock data, creating various technical analysis charts, and performing trend analysis.
+A comprehensive tool for downloading, analyzing, and visualizing Chinese A-share stock market data. This system provides an easy-to-use interface for accessing historical stock data and generating various technical analysis charts.
 
 ## Features
 
-- **Batch Data Download**: Concurrent downloading of stock data for all A-shares
-- **Data Validation**: Automatic verification of data completeness and integrity
-- **Multiple Visualization Options**:
-  - Candlestick charts
-  - Moving average analysis
-  - Trend visualization
-- **Customizable Parameters**: Flexible date ranges, frequencies, and analysis periods
+- **Data Download**
+  - Download historical data for all A-share stocks
+  - Selective download for specific stock codes
+  - Automatic data validation and error handling
+  - Multi-threaded downloading for improved performance
+  - ST stock and delisting detection
 
-## Requirements
+- **Visualization Tools**
+  - Candlestick (K-line) charts
+  - Moving Average (MA) analysis with customizable periods
+  - Trend analysis combining price and moving averages
+  - Professional-grade charts with Chinese character support
 
-```
-python >= 3.7
-akshare
-pandas
-matplotlib
-tqdm
+## Prerequisites
+
+The following Python packages are required:
+
+```bash
+pip install akshare pandas matplotlib tqdm
 ```
 
 ## Installation
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/stock-analysis-system.git
-cd stock-analysis-system
+git clone https://github.com/JoshuaMaoJH/StockAssistant.git
+cd StockAssistant
 ```
 
-2. Install required packages:
+2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
@@ -39,104 +42,108 @@ pip install -r requirements.txt
 
 ### Basic Usage
 
+1. Start the system:
+```bash
+python stock_system.py
+```
+
+2. Use the menu interface to:
+   - Download stock data
+   - Generate visualizations
+   - Exit the program
+
+### Advanced Usage
+
+You can also use the system programmatically:
+
 ```python
 from stock_system import StockSystem
 
-# Create system instance
-stock_system = StockSystem()
+# Initialize the system
+system = StockSystem()
 
 # Download data for all stocks
-stock_system.downloader.download_all_stocks()
+system.downloader.download_all_stocks()
 
-# Draw charts for a specific stock
-stock_code = '000001'  # Example: Ping An Bank
+# Draw a candlestick chart for a specific stock
+system.line_drawer.draw_single_stock_kline('000001')
 
-# Draw candlestick chart
-stock_system.lineDrawer.draw_single_stock_kline(stock_code)
-
-# Draw moving averages (5, 10, 20, 30 days)
-stock_system.lineDrawer.draw_single_stock_ma([5,10,20,30], stock_code)
+# Draw MA lines with custom periods
+system.line_drawer.draw_single_stock_ma([5, 10, 20], '000001')
 
 # Draw trend analysis
-stock_system.lineDrawer.draw_single_stock_trends(stock_code)
+system.line_drawer.draw_single_stock_trends('000001')
 ```
 
-### Advanced Configuration
+## Configuration
 
-You can customize various parameters by modifying the `StockDownloader` initialization:
+Default settings can be modified in `StockDownloader.__init__()`:
 
-```python
-class StockDownloader:
-    def __init__(self):
-        self.frequency = 'daily'  # Change data frequency
-        self.start_date = '20220101'  # Modify start date
-        self.end_date = dt.datetime.now().strftime('%Y%m%d')  # Modify end date
-        self.max_workers = 10  # Adjust concurrent download threads
-```
+- `frequency`: Data frequency ('daily' by default)
+- `start_date`: Start date for historical data ('20220101' by default)
+- `end_date`: End date (current date by default)
+- `max_workers`: Maximum concurrent download threads (10 by default)
 
-## Project Structure
+## Data Structure
 
-```
-stock-analysis-system/
-├── stock_system.py     # Main system implementation
-├── requirements.txt    # Package dependencies
-├── stock_data/        # Downloaded stock data directory
-└── README.md          # This file
-```
-
-## Class Overview
-
-### StockDownloader
-Handles all data downloading and management operations:
-- Downloads stock data using AKShare API
-- Manages concurrent downloads
-- Validates data integrity
-- Saves data to CSV files
-
-### StockLineDrawer
-Provides visualization functionality:
-- Candlestick charts
-- Moving average analysis
-- Trend visualization
-- Customizable chart parameters
-
-### StockSystem
-Main system class that integrates all functionality:
-- Initializes necessary components
-- Provides unified interface for all operations
-
-## Data Storage
-
-Stock data is stored in CSV format in the `stock_data` directory. Each file is named using the format:
-```
-{stock_code}_{stock_name}_{start_date}_{end_date}.csv
-```
+Downloaded stock data includes:
+- Date (日期)
+- Opening Price (开盘)
+- Closing Price (收盘)
+- Highest Price (最高)
+- Lowest Price (最低)
+- Trading Volume (成交量)
+- Trading Amount (成交额)
+- Price Amplitude (振幅)
+- Price Change Ratio (涨跌幅)
+- Price Change Amount (涨跌额)
+- Turnover Rate (换手率)
 
 ## Error Handling
 
-The system includes comprehensive error handling:
-- Network errors during downloads
-- Data validation errors
-- File system errors
+The system includes comprehensive error handling for:
+- Invalid stock codes
+- Network connection issues
+- Data validation failures
+- File system operations
 - Visualization errors
+
+## Examples
+
+### Downloading Stock Data
+```python
+# Download single stock
+system = StockSystem()
+system.downloader.download_single_stock('000001')
+
+# Check downloaded data size
+files, _, _, mb, _ = system.downloader.check_size_of_all_stock_data()
+print(f"Total data size: {mb:.2f} MB")
+```
+
+### Creating Visualizations
+```python
+# Draw candlestick chart with 5, 10, and 20-day moving averages
+system.line_drawer.draw_single_stock_ma([5, 10, 20], '000001')
+```
 
 ## Contributing
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
+## Author
+
+Joshua MaoJH (https://github.com/JoshuaMaoJH)
+
 ## Acknowledgments
 
-- [AKShare](https://www.akshare.xyz/) for providing the data API
-- Chinese A-share market data providers
+- Thanks to the AKShare project for providing the data API
+- Special thanks to all contributors and users of this system
 
 ## Support
 
-For support and questions, please open an issue in the GitHub repository.
+For support and questions, please open an issue in the GitHub repository or contact the author directly.
