@@ -111,6 +111,7 @@ def main():
     # Initialize the stock system
     stock_system = StockSystem()
 
+
     # Main program loop
     while True:
         # Display main menu options

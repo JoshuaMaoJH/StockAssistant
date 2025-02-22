@@ -2,14 +2,14 @@
 # This system provides functionality for downloading, analyzing, and visualizing Chinese A-share stock data
 # Author: Joshua Mao
 # Date: 02-22-2025
-# Version: 1.0.1
+# Version: 0.0.2
 
 import akshare as ak
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 from tqdm import tqdm
 import os
-import datetime as dt
+from datetime import datetime
 import matplotlib.pyplot as plt
 
 
@@ -33,7 +33,7 @@ class StockDownloader:
         """
         self.frequency = 'daily'
         self.start_date = '20220101'
-        self.end_date = dt.datetime.now().strftime('%Y%m%d')
+        self.end_date = datetime.now().strftime('%Y%m%d')
         self.max_workers = 10
         self.stocks = self.get_all_stocks()
         self.folder = 'stock_data'
