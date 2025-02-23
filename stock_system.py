@@ -24,6 +24,14 @@ class StockAnalysisSystem:
         self.downloader = downloader
         self.folder = 'analysis_results'
 
+    def get_analyze_top(self, interesting_stocks, top_n=5):
+        """获取前n个分析结果"""
+        if interesting_stocks:
+            # 按概率降序排序
+            sorted_stocks = sorted(interesting_stocks.items(), key=lambda x: x[1]['probability'], reverse=True)
+            return dict(sorted_stocks[:top_n])
+        return {}
+
     def is_stock_limit_up(self, stock_code, day):
         """检查股票是否涨停"""
         try:
@@ -495,7 +503,8 @@ class StockDownloader:
         if 'ST' in stock_name or '退' in stock_name:
             return False
 
-        if stock_code.startswith('4') or stock_code.startswith('8') or stock_code.startswith('9') or stock_code.startswith('68'):
+        if stock_code.startswith('4') or stock_code.startswith('8') or stock_code.startswith(
+                '9') or stock_code.startswith('68'):
             return False
 
         return True
@@ -717,16 +726,19 @@ Note: This system requires the following packages:
 - tqdm
 """
 
+
 def download_all_stocks(stock_system):
     print("\nDownloading stock data...")
     stock_system.downloader.download_all_stocks()
     print("\nDownload complete!")
+
 
 def analyze_all_stocks(stock_system):
     print("\nAnalyzing stocks...")
     interesting_stocks = stock_system.analysis_system.analyze_all_stocks()
     print("\nAnalysis complete!")
     return interesting_stocks
+
 
 def analyze_single_stock(stock_system, stock_code):
     print(f"\nAnalyzing stock {stock_code}...")
@@ -738,6 +750,7 @@ def analyze_single_stock(stock_system, stock_code):
         print("\nNo interesting data found for this stock.")
 
     return is_interesting, analysis_result
+
 
 def print_analyze(interesting_stocks):
     print("\n=== Analysis Results ===")
@@ -763,6 +776,7 @@ def print_analyze(interesting_stocks):
             print()
     else:
         print("No stocks matching the criteria found.")
+
 
 def print_analyze_top(interesting_stocks, top_n=5):
     print("\n=== Top Analysis Results ===")
@@ -793,10 +807,12 @@ def print_analyze_top(interesting_stocks, top_n=5):
     else:
         print("No stocks matching the criteria found.")
 
+
 def save_analysis_result(interesting_stocks):
     print("\nSaving analysis results...")
     stock_system.analysis_system.save_analysis_result(interesting_stocks)
     print("Results saved successfully!")
+
 
 if __name__ == '__main__':
     print("=== Stock Analysis Example ===")
@@ -806,15 +822,106 @@ if __name__ == '__main__':
 
     stock_system = StockSystem()
     stock_system.downloader.max_workers = 25
+    trade_date_list = [
+        '20250102',
+        '20250103',
+        '20250106',
+        '20250107',
+        '20250108',
+        '20250110',
+        '20250112',
+        '20250113',
+        '20250114',
+        '20250117',
+        '20250118',
+        '20250119',
+        '20250120',
+        '20250121',
+        '20250124',
+        '20250125',
+        '20250126'
+    ]
 
-    # 下载数据
-    download_all_stocks(stock_system)
+    filter_codes_list = []
+    filter_stock_dict = {}
+    buy_sell_profit_dict = {}
+    for filter_date in trade_date_list:
+        stock_system.downloader.end_date = filter_date
 
-    # 分析股票
-    interesting_stocks = analyze_all_stocks(stock_system)
+        # 下载数据
+        download_all_stocks(stock_system)
 
-    # 输出分析结果
-    print_analyze_top(interesting_stocks)
+        # 分析股票
+        interesting_stocks = analyze_all_stocks(stock_system)
 
-    # 保存分析结果
-    save_analysis_result(interesting_stocks)
+        # 输出分析结果
+        print_analyze_top(interesting_stocks)
+
+        # 保存分析结果
+        save_analysis_result(interesting_stocks)
+
+        filter_codes_dict = stock_system.analysis_system.get_analyze_top(interesting_stocks)
+
+        print(f'{filter_date}选股结果{filter_codes_dict}')
+
+        filter_codes_list = list(filter_codes_dict.keys())
+
+        #filter_stock_dict.update(filter_codes_dict[filter_date], filter_codes_list)
+
+        # 计算选股日期后未来两天的收益情况（买卖策略：次日开盘买入，次次日收盘卖出）
+        # 获取akshare的交易日历
+        trade_date_df = ak.tool_trade_date_hist_sina()
+        # 将'日期'转换成字符串 %Y%m%d 格式
+        trade_date_df['trade_date'] = trade_date_df['trade_date'].apply(lambda x: x.strftime('%Y%m%d'))
+        # 判断选股日期在交易日历trade_date_df的索引
+        filter_date_index = trade_date_df[trade_date_df['trade_date'] == filter_date].index[0]
+        # 获取选股日期后买入交易日
+        buy_date = trade_date_df.loc[filter_date_index + 1, 'trade_date']
+        # 获取选股日期后的卖出交易日
+        sell_date = trade_date_df.loc[filter_date_index + 2, 'trade_date']
+        # 计算选股日期后未来两天的收益情况
+        buy_sell_profit_df_list = []
+        for stock_code in filter_codes_list:
+            # 获取买入交易日的开盘价
+            buy_date_data = ak.stock_zh_a_hist(symbol=stock_code, period='daily', start_date=buy_date, end_date=buy_date, adjust="qfq")
+            buy_open = buy_date_data['开盘'][0]
+            # 获取卖出交易日的收盘价
+            sell_date_data = ak.stock_zh_a_hist(symbol=stock_code, period='daily', start_date=sell_date, end_date=sell_date, adjust="qfq")
+            sell_close = sell_date_data['收盘'][0]
+            # 计算收益率
+            increase = (sell_close - buy_open) / buy_open
+            #将收益情况保存，遍历结束后计算总收益
+            buy_sell_result_df = pd.DataFrame(
+                                            columns=[
+                                                'filter_date',
+                                                'stock_code',
+                                                'buy_date',
+                                                'buy_open',
+                                                'sell_date',
+                                                'sell_close',
+                                                'increase'
+                                                ]
+                                            )
+            buy_sell_result_df['filter_date'] = filter_date
+            buy_sell_result_df['stock_code'] = stock_code
+            buy_sell_result_df['buy_date'] = buy_date
+            buy_sell_result_df['buy_open'] = buy_open
+            buy_sell_result_df['sell_date'] = sell_date
+            buy_sell_result_df['sell_close'] = sell_close
+            buy_sell_result_df['increase'] = increase
+            buy_sell_profit_df_list.append(buy_sell_result_df)
+            # 输出收益情况
+            print(f'{filter_date}选股股票{stock_code}未来两天收益率：{increase:.2%}')
+
+        # 合并收益情况
+        buy_sell_profit_df = pd.concat(buy_sell_profit_df_list)
+        # 计算总收益
+        total_profit = buy_sell_profit_df['increase'].sum()
+        #增加一列保存总收益
+        buy_sell_profit_df['total_profit'] = total_profit
+        #保存选股日期后未来两天的收益情况
+        buy_sell_profit_df.to_csv(f'{filter_date}_buy_sell_profit.csv', index=False, mode='a')
+        # 输出总收益
+        print(f'{filter_date}选股日期后未来两天的总收益率：{total_profit:.2%}')
+        print(f'{filter_date}选股日期后未来两天的收益情况已保存！')
+
