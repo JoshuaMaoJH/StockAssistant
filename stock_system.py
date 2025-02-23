@@ -2,7 +2,7 @@
 # This system provides functionality for downloading, analyzing, and visualizing Chinese A-share stock data
 # Author: Joshua Mao
 # Date: 02-22-2025
-# Version: 0.0.6
+# Version: 0.1.4
 
 import akshare as ak
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -22,6 +22,7 @@ class StockDataError(Exception):
 class StockAnalysisSystem:
     def __init__(self, downloader):
         self.downloader = downloader
+        self.folder = 'analysis_results'
 
     def is_stock_limit_up(self, stock_code, day):
         """检查股票是否涨停"""
@@ -95,11 +96,186 @@ class StockAnalysisSystem:
             logging.error(f"Error getting date data for {stock_code}: {e}")
             return e
 
+    def get_ma(self, stock_code, ma_days, day='2022-01-04'):
+        """
+        获取股票的均线数据
+
+        Args:
+            stock_code (str): 股票代码
+            ma_days (list): 需要计算的均线天数列表，如 [5, 10, 20]
+            day (str): 查询日期，格式为 'YYYY-MM-DD'
+
+        Returns:
+            dict: 包含各个周期均线值的字典，格式如 {'5': 10.5, '10': 10.2, '20': 10.0}
+        """
+        try:
+            # 构建文件路径
+            file_path = f'{self.downloader.folder}/{stock_code}_{self.downloader.stocks[stock_code]}_{self.downloader.start_date}_{self.downloader.end_date}.csv'
+
+            # 读取数据
+            stock_data = self.downloader.read_csv(file_path)
+            if stock_data is None or stock_data.empty:
+                logging.error(f"No data found for stock {stock_code}")
+                return {str(d): None for d in ma_days}
+
+            # 确保日期列格式正确
+            stock_data['日期'] = pd.to_datetime(stock_data['日期'])
+            target_date = pd.to_datetime(day)
+
+            # 按日期排序并重置索引
+            stock_data = stock_data.sort_values('日期').reset_index(drop=True)
+
+            # 获取目标日期之前的所有数据
+            data_until_target = stock_data[stock_data['日期'] <= target_date]
+
+            if data_until_target.empty:
+                logging.error(f"No data found before or on date {day}")
+                return {str(d): None for d in ma_days}
+
+            # 计算各周期均线
+            ma_values = {}
+            for d in ma_days:
+                if len(data_until_target) >= d:
+                    # 使用最后d天的数据计算均线
+                    ma_data = data_until_target['收盘'].tail(d).mean()
+                    ma_values[str(d)] = round(float(ma_data), 2)
+                else:
+                    logging.warning(
+                        f"Insufficient data for {d}-day MA calculation. Only {len(data_until_target)} days available.")
+                    ma_values[str(d)] = None
+
+            return ma_values
+
+        except Exception as e:
+            logging.error(f"Error calculating MA for {stock_code}: {str(e)}")
+            return {str(d): None for d in ma_days}
+
+    def predict_limit_up_probability(self, stock_code: str) -> dict:
+        """
+        预测股票涨停概率
+
+        Args:
+            stock_code (str): 股票代码
+
+        Returns:
+            dict: 包含涨停概率和详细指标的字典
+        """
+        try:
+            # 获取股票数据
+            file_path = f'{self.downloader.folder}/{stock_code}_{self.downloader.stocks[stock_code]}_{self.downloader.start_date}_{self.downloader.end_date}.csv'
+            stock_data = self.downloader.read_csv(file_path)
+
+            if stock_data is None or stock_data.empty:
+                return {"probability": 0, "status": "数据不足"}
+
+            # 获取最近两天的数据
+            last_two_days = stock_data.tail(2)
+            if len(last_two_days) < 2:
+                return {"probability": 0, "status": "数据不足"}
+
+            this_day = last_two_days.iloc[-1]
+            last_day = last_two_days.iloc[-2]
+
+            # 1. 成交量比值评分 (30%)
+            volume_ratio = float(this_day['成交额']) / float(last_day['成交额'])
+            volume_score = (100 if 1.8 <= volume_ratio <= 2.2 else
+                            80 if (1.5 <= volume_ratio < 1.8 or 2.2 < volume_ratio <= 2.5) else 40)
+
+            # 2. 价格变动评分 (30%)
+            price_change = ((float(this_day['收盘']) - float(last_day['收盘'])) / float(last_day['收盘'])) * 100
+            price_score = (100 if 2 <= price_change <= 4 else
+                           80 if (1 <= price_change < 2 or 4 < price_change <= 5) else 40)
+
+            # 3. 换手率评分 (40%)
+            turnover = float(this_day['换手率'])
+            turnover_score = (100 if turnover >= 4 else
+                              80 if 2 <= turnover < 4 else 40)
+
+            # 4. 计算均线趋势系数
+            stock_data['MA5'] = stock_data['收盘'].astype(float).rolling(window=5).mean()
+            stock_data['MA10'] = stock_data['收盘'].astype(float).rolling(window=10).mean()
+            latest_ma = stock_data.iloc[-1]
+            trend_coef = (1.2 if latest_ma['MA5'] > latest_ma['MA10'] else
+                          0.8 if latest_ma['MA5'] < latest_ma['MA10'] else 1.0)
+
+            # 计算最终得分
+            final_score = (volume_score * 0.3 +
+                           price_score * 0.3 +
+                           turnover_score * 0.4) * trend_coef
+
+            probability = min(round(final_score, 2), 100)
+
+            # 返回结果
+            return {
+                "probability": probability,
+                "risk_level": ("极强" if probability >= 85 else
+                               "强烈" if probability >= 70 else
+                               "中等" if probability >= 50 else "较弱"),
+                "indicators": {
+                    "volume_ratio": round(volume_ratio, 2),
+                    "price_change": round(price_change, 2),
+                    "turnover": round(turnover, 2),
+                    "ma5": round(float(latest_ma['MA5']), 2),
+                    "ma10": round(float(latest_ma['MA10']), 2)
+                },
+                "scores": {
+                    "volume_score": volume_score,
+                    "price_score": price_score,
+                    "turnover_score": turnover_score,
+                    "trend_coef": trend_coef
+                },
+                "date": this_day['日期'],
+                "stock_name": self.downloader.stocks[stock_code],
+                "status": "success"
+            }
+
+        except Exception as e:
+            logging.error(f"Error calculating limit up probability for {stock_code}: {str(e)}")
+            return {
+                "probability": 0,
+                "status": f"error: {str(e)}"
+            }
+
+    def have_file(self, file_path):
+        if os.path.exists(file_path):
+            return True
+        return False
+
+    def save_analysis_result(self, interesting_stocks):
+        """保存分析结果"""
+        if not os.path.exists(self.folder):
+            os.makedirs(self.folder)
+
+        for stock_code, analysis in interesting_stocks.items():
+            file_path = f'{self.folder}/{stock_code}_{analysis["date"]}.txt'
+            with open(file_path, 'w', encoding='utf-8') as f:
+                # 先判断是不是返回正确
+                if not analysis['status'] == 'success':
+                    f.write(f"Error: {analysis['status']}")
+                    continue
+                f.write(f"Stock Name: {analysis['stock_name']}\n")
+                f.write(f"Date: {analysis['date']}\n")
+                f.write(f"Probability: {analysis['probability']}%\n")
+                f.write(f"Risk Level: {analysis['risk_level']}\n\n")
+                f.write("Indicators:\n")
+                f.write(f"  Volume Ratio: {analysis['indicators']['volume_ratio']}\n")
+                f.write(f"  Price Change: {analysis['indicators']['price_change']}\n")
+                f.write(f"  Turnover Rate: {analysis['indicators']['turnover']}\n")
+                f.write(f"  MA5: {analysis['indicators']['ma5']}\n")
+                f.write(f"  MA10: {analysis['indicators']['ma10']}\n\n")
+                f.write("Scores:\n")
+                f.write(f"  Volume Score: {analysis['scores']['volume_score']}\n")
+                f.write(f"  Price Score: {analysis['scores']['price_score']}\n")
+                f.write(f"  Turnover Score: {analysis['scores']['turnover_score']}\n")
+                f.write(f"  Trend Coefficient: {analysis['scores']['trend_coef']}\n")
+
     def analyze_stock(self, stock_code):
         """分析单个股票"""
         try:
             # 读取数据
             file_path = f'{self.downloader.folder}/{stock_code}_{self.downloader.stocks[stock_code]}_{self.downloader.start_date}_{self.downloader.end_date}.csv'
+            if not self.have_file(file_path):
+                return False, {}
             stock_data = self.downloader.read_csv(file_path)
 
             # 获取最近的交易日数据
@@ -114,40 +290,11 @@ class StockAnalysisSystem:
             if last_close is None or this_close is None:
                 return False, {}
 
-            # 计算涨跌幅
-            increase_rate = ((this_close - last_close) / last_close) * 100
-
-            # 获取成交量数据
-            try:
-                last_volume = float(stock_data['成交量'].values[-2])
-                this_volume = float(stock_data['成交量'].values[-1])
-                is_volume_up = this_volume > last_volume
-            except (IndexError, ValueError, TypeError):
-                is_volume_up = False
-
-            # 判断趋势
-            is_uptrend = this_close > last_close
-
             # 返回分析结果
-            analysis_result = {
-                'date': this_day_date,
-                'stock_name': self.downloader.stocks[stock_code],
-                'close_price': this_close,
-                'increase_rate': round(increase_rate, 2),
-                'is_uptrend': is_uptrend,
-                'is_volume_up': is_volume_up
-            }
+            analysis_result = self.predict_limit_up_probability(stock_code)
 
             # 定义筛选条件
-            is_interesting = (
-                    is_uptrend and
-                    is_volume_up and
-                    increase_rate > 2.0
-            )
-
-            is_interesting = (self.get_increase(stock_code, this_day_date) > self.get_increase(stock_code, last_day_date)
-                              and self.is_stock_limit_up(stock_code, this_day_date) and self.is_stock_limit_up(stock_code, last_day_date)
-                              and is_interesting)
+            is_interesting = analysis_result['probability'] >= 70
 
             return is_interesting, analysis_result
 
@@ -157,24 +304,16 @@ class StockAnalysisSystem:
 
     def analyze_all_stocks(self):
         """分析所有股票并返回符合条件的结果"""
-        results = {}
         interesting_stocks = {}
 
         with ThreadPoolExecutor(max_workers=self.downloader.max_workers) as executor:
             with tqdm(total=len(self.downloader.stocks), desc='ANALYSIS PROGRESS', unit='stock(s)') as pbar:
-                futures = {
-                    executor.submit(self.analyze_stock, stock_code): stock_code
-                    for stock_code in self.downloader.stocks.keys()
-                }
-
+                futures = {executor.submit(self.analyze_stock, code): code for code in self.downloader.stocks.keys()}
                 for future in as_completed(futures):
-                    stock_code = futures[future]
-                    try:
-                        is_interesting, analysis = future.result()
-                        if is_interesting:
-                            interesting_stocks[stock_code] = analysis
-                    except Exception as e:
-                        logging.error(f"Error processing {stock_code}: {e}")
+                    code = futures[future]
+                    is_interesting, analysis_result = future.result()
+                    if is_interesting:
+                        interesting_stocks[code] = analysis_result
                     pbar.update(1)
 
         return interesting_stocks
@@ -354,6 +493,9 @@ class StockDownloader:
         # Check if it's an ST stock or delisted stock using the stock name from self.stocks
         stock_name = self.stocks.get(stock_code, "")
         if 'ST' in stock_name or '退' in stock_name:
+            return False
+
+        if stock_code.startswith('4') or stock_code.startswith('8') or stock_code.startswith('9') or stock_code.startswith('68'):
             return False
 
         return True
@@ -575,6 +717,87 @@ Note: This system requires the following packages:
 - tqdm
 """
 
+def download_all_stocks(stock_system):
+    print("\nDownloading stock data...")
+    stock_system.downloader.download_all_stocks()
+    print("\nDownload complete!")
+
+def analyze_all_stocks(stock_system):
+    print("\nAnalyzing stocks...")
+    interesting_stocks = stock_system.analysis_system.analyze_all_stocks()
+    print("\nAnalysis complete!")
+    return interesting_stocks
+
+def analyze_single_stock(stock_system, stock_code):
+    print(f"\nAnalyzing stock {stock_code}...")
+    is_interesting, analysis_result = stock_system.analysis_system.analyze_stock(stock_code)
+    if is_interesting:
+        print("\nInteresting stock found!")
+        print(analysis_result)
+    else:
+        print("\nNo interesting data found for this stock.")
+
+    return is_interesting, analysis_result
+
+def print_analyze(interesting_stocks):
+    print("\n=== Analysis Results ===")
+    if interesting_stocks:
+        print(f"Found {len(interesting_stocks)} interesting stocks:")
+        for stock_code, analysis in interesting_stocks.items():
+            print(f"Stock Code: {stock_code}")
+            print(f"Stock Name: {analysis['stock_name']}")
+            print(f"Date: {analysis['date']}")
+            print(f"Probability: {analysis['probability']}%")
+            print(f"Risk Level: {analysis['risk_level']}")
+            print(f"Indicators:")
+            print(f"  Volume Ratio: {analysis['indicators']['volume_ratio']}")
+            print(f"  Price Change: {analysis['indicators']['price_change']}")
+            print(f"  Turnover Rate: {analysis['indicators']['turnover']}")
+            print(f"  MA5: {analysis['indicators']['ma5']}")
+            print(f"  MA10: {analysis['indicators']['ma10']}")
+            print(f"Scores:")
+            print(f"  Volume Score: {analysis['scores']['volume_score']}")
+            print(f"  Price Score: {analysis['scores']['price_score']}")
+            print(f"  Turnover Score: {analysis['scores']['turnover_score']}")
+            print(f"  Trend Coefficient: {analysis['scores']['trend_coef']}")
+            print()
+    else:
+        print("No stocks matching the criteria found.")
+
+def print_analyze_top(interesting_stocks, top_n=5):
+    print("\n=== Top Analysis Results ===")
+    if interesting_stocks:
+        # Sort stocks by probability in descending order
+        sorted_stocks = sorted(interesting_stocks.items(), key=lambda x: x[1]['probability'], reverse=True)
+        print(f"Top {top_n} interesting stocks:")
+        for i, (stock_code, analysis) in enumerate(sorted_stocks[:top_n]):
+            print(f"TOP {i + 1}")
+            print(f"Stock Code: {stock_code}")
+            print(f"Stock Name: {analysis['stock_name']}")
+            print(f"Date: {analysis['date']}")
+            print(f"Probability: {analysis['probability']}%")
+            print(f"Risk Level: {analysis['risk_level']}")
+            print(f"Indicators:")
+            print(f"  Volume Ratio: {analysis['indicators']['volume_ratio']}")
+            print(f"  Price Change: {analysis['indicators']['price_change']}")
+            print(f"  Turnover Rate: {analysis['indicators']['turnover']}")
+            print(f"  MA5: {analysis['indicators']['ma5']}")
+            print(f"  MA10: {analysis['indicators']['ma10']}")
+            print(f"Scores:")
+            print(f"  Volume Score: {analysis['scores']['volume_score']}")
+            print(f"  Price Score: {analysis['scores']['price_score']}")
+            print(f"  Turnover Score: {analysis['scores']['turnover_score']}")
+            print(f"  Trend Coefficient: {analysis['scores']['trend_coef']}")
+            print()
+
+    else:
+        print("No stocks matching the criteria found.")
+
+def save_analysis_result(interesting_stocks):
+    print("\nSaving analysis results...")
+    stock_system.analysis_system.save_analysis_result(interesting_stocks)
+    print("Results saved successfully!")
+
 if __name__ == '__main__':
     print("=== Stock Analysis Example ===")
 
@@ -583,26 +806,15 @@ if __name__ == '__main__':
 
     stock_system = StockSystem()
     stock_system.downloader.max_workers = 25
-    stock_system.downloader.start_date = '20220101'
-    stock_system.downloader.end_date = '20250217'
 
     # 下载数据
-    print("Downloading stock data...")
-    stock_system.downloader.download_all_stocks()
+    download_all_stocks(stock_system)
 
     # 分析股票
-    print("\nAnalyzing stocks...")
-    interesting_stocks = stock_system.analysis_system.analyze_all_stocks()
+    interesting_stocks = analyze_all_stocks(stock_system)
 
     # 输出分析结果
-    print("\n=== Analysis Results ===")
-    if interesting_stocks:
-        print(f"Found {len(interesting_stocks)} interesting stocks:")
-        for stock_code, analysis in interesting_stocks.items():
-            print(f"\n{analysis['stock_name']} ({stock_code}):")
-            print(f"  日期: {analysis['date']}")
-            print(f"  收盘价: {analysis['close_price']:.2f}")
-            print(f"  涨跌幅: {analysis['increase_rate']}%")
-            print(f"  成交量增加: {'是' if analysis['is_volume_up'] else '否'}")
-    else:
-        print("No stocks matching the criteria found.")
+    print_analyze_top(interesting_stocks)
+
+    # 保存分析结果
+    save_analysis_result(interesting_stocks)
