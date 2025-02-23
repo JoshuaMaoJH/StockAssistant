@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 from tqdm import tqdm
 import os
-from datetime import datetime
+from datetime import datetime,timedelta
 import matplotlib.pyplot as plt
 import logging
 
@@ -814,6 +814,69 @@ def save_analysis_result(interesting_stocks):
     print("Results saved successfully!")
 
 
+########增加一个选股日期输入模块
+def get_date_input():
+    # 获取输入的日期
+    input_start = input("请输入选股开始日期（格式：YYYYMMDD）：").strip()
+    input_end = input("请输入选股结束日期（格式：YYYYMMDD）：").strip()
+    #获取akshare交易日历
+    trade_date_df = ak.tool_trade_date_hist_sina()
+    #将'日期'转换成字符串 %Y%m%d 格式
+    trade_date_df['trade_date'] = trade_date_df['trade_date'].apply(lambda x: x.strftime('%Y%m%d'))
+    trade_date_list = trade_date_df['trade_date'].tolist()
+    #判断输入的日期是否在交易日历中,如果不在则往前找到最近一个交易日
+    while input_start not in trade_date_list:
+        input_start = (datetime.strptime(input_start, '%Y%m%d') - timedelta(days=1)).strftime('%Y%m%d')
+    while input_end not in trade_date_list:
+        input_end = (datetime.strptime(input_end, '%Y%m%d') - timedelta(days=1)).strftime('%Y%m%d')
+    #获取input_start和input_end在trade_date_list中的索引
+    input_start_index = trade_date_list.index(input_start)
+    input_end_index = trade_date_list.index(input_end)
+    #获取input_start和input_end的索引之间的交易日
+    trade_date_list = trade_date_list[input_start_index:input_end_index+1]
+    return input_start, input_end,trade_date_list
+
+def get_buy_sell_result_combined():
+    # 假设所有 CSV 文件保存在 'buy_sell_result' 文件夹下
+    folder_path = 'buy_sell_result'
+    all_dfs = []
+
+    # 遍历文件夹中的所有 CSV 文件
+    for file_name in os.listdir(folder_path):
+        if file_name.endswith('_buy_sell_profit.csv'):
+            file_path = os.path.join(folder_path, file_name)
+            df = pd.read_csv(file_path)
+            all_dfs.append(df)
+
+    # 按行合并所有 DataFrame
+    combined_df = pd.concat(all_dfs, axis=0, ignore_index=True)
+
+    # 计算所有 increase 的总和
+    total_increase_sum = combined_df['increase'].sum()
+
+    # 添加总收益之和列，默认填充 NaN
+    combined_df['total_increase_sum'] = pd.NA
+
+    # 只在最后一行填入总收益之和
+    if not combined_df.empty:
+        combined_df.loc[combined_df.index[-1], 'total_increase_sum'] = total_increase_sum
+
+    # 计算并输出每个 filter_date 的总收益（作为参考）
+    grouped_totals = combined_df.groupby('filter_date')['increase'].sum()
+    print("每个选股日期的总收益：")
+    for filter_date, total in grouped_totals.items():
+        print(f'{filter_date} 总收益率：{total:.2%}')
+
+    # 输出所有日期的总收益之和
+    print(f'所有选股日期的总收益之和：{total_increase_sum:.2%}')
+
+    # 保存合并后的结果
+    combined_df.to_csv('buy_sell_result/combined_buy_sell_profit.csv', index=False)
+
+    # 查看合并后的 DataFrame
+    print("\n合并后的 DataFrame:")
+    print(combined_df)
+
 if __name__ == '__main__':
     print("=== Stock Analysis Example ===")
 
@@ -822,52 +885,24 @@ if __name__ == '__main__':
 
     stock_system = StockSystem()
     stock_system.downloader.max_workers = 25
-    trade_date_list = [
-        '20250102',
-        '20250103',
-        '20250106',
-        '20250107',
-        '20250108',
-        '20250110',
-        '20250112',
-        '20250113',
-        '20250114',
-        '20250117',
-        '20250118',
-        '20250119',
-        '20250120',
-        '20250121',
-        '20250124',
-        '20250125',
-        '20250126'
-    ]
 
-    filter_codes_list = []
-    filter_stock_dict = {}
+    input_start, input_end, trade_date_list = get_date_input()
+    print(f'选股日期范围：{input_start}至{input_end}')
     buy_sell_profit_dict = {}
     for filter_date in trade_date_list:
         stock_system.downloader.end_date = filter_date
-
         # 下载数据
         download_all_stocks(stock_system)
-
         # 分析股票
         interesting_stocks = analyze_all_stocks(stock_system)
-
         # 输出分析结果
         print_analyze_top(interesting_stocks)
-
         # 保存分析结果
         save_analysis_result(interesting_stocks)
-
         filter_codes_dict = stock_system.analysis_system.get_analyze_top(interesting_stocks)
-
         print(f'{filter_date}选股结果{filter_codes_dict}')
-
+        #
         filter_codes_list = list(filter_codes_dict.keys())
-
-        #filter_stock_dict.update(filter_codes_dict[filter_date], filter_codes_list)
-
         # 计算选股日期后未来两天的收益情况（买卖策略：次日开盘买入，次次日收盘卖出）
         # 获取akshare的交易日历
         trade_date_df = ak.tool_trade_date_hist_sina()
@@ -879,49 +914,61 @@ if __name__ == '__main__':
         buy_date = trade_date_df.loc[filter_date_index + 1, 'trade_date']
         # 获取选股日期后的卖出交易日
         sell_date = trade_date_df.loc[filter_date_index + 2, 'trade_date']
+
+        total_increase = 0
+
         # 计算选股日期后未来两天的收益情况
-        buy_sell_profit_df_list = []
+        buy_sell_profit_df_dict_list = []
         for stock_code in filter_codes_list:
+            # 创建一个新的字典对象，避免引用问题
+            buy_sell_profit_df_dict = {}
+
             # 获取买入交易日的开盘价
-            buy_date_data = ak.stock_zh_a_hist(symbol=stock_code, period='daily', start_date=buy_date, end_date=buy_date, adjust="qfq")
-            buy_open = buy_date_data['开盘'][0]
+            buy_date_data = ak.stock_zh_a_hist(symbol=stock_code, period='daily', start_date=buy_date,
+                                               end_date=buy_date, adjust="qfq")
+            buy_open = round(buy_date_data['开盘'][0], 2)
+
             # 获取卖出交易日的收盘价
-            sell_date_data = ak.stock_zh_a_hist(symbol=stock_code, period='daily', start_date=sell_date, end_date=sell_date, adjust="qfq")
+            sell_date_data = ak.stock_zh_a_hist(symbol=stock_code, period='daily', start_date=sell_date,
+                                                end_date=sell_date, adjust="qfq")
             sell_close = sell_date_data['收盘'][0]
+
             # 计算收益率
             increase = (sell_close - buy_open) / buy_open
-            #将收益情况保存，遍历结束后计算总收益
-            buy_sell_result_df = pd.DataFrame(
-                                            columns=[
-                                                'filter_date',
-                                                'stock_code',
-                                                'buy_date',
-                                                'buy_open',
-                                                'sell_date',
-                                                'sell_close',
-                                                'increase'
-                                                ]
-                                            )
-            buy_sell_result_df['filter_date'] = filter_date
-            buy_sell_result_df['stock_code'] = stock_code
-            buy_sell_result_df['buy_date'] = buy_date
-            buy_sell_result_df['buy_open'] = buy_open
-            buy_sell_result_df['sell_date'] = sell_date
-            buy_sell_result_df['sell_close'] = sell_close
-            buy_sell_result_df['increase'] = increase
-            buy_sell_profit_df_list.append(buy_sell_result_df)
+
+            # 保存收益情况到新字典
+            buy_sell_profit_df_dict['filter_date'] = filter_date
+            buy_sell_profit_df_dict['stock_code'] = stock_code
+            buy_sell_profit_df_dict['buy_date'] = buy_date
+            buy_sell_profit_df_dict['buy_open'] = buy_open
+            buy_sell_profit_df_dict['sell_date'] = sell_date
+            buy_sell_profit_df_dict['sell_close'] = sell_close
+            buy_sell_profit_df_dict['increase'] = round(increase,2)
+            total_increase += increase
+
+            # 将新字典添加到列表
+            buy_sell_profit_df_dict_list.append(buy_sell_profit_df_dict)
+
             # 输出收益情况
             print(f'{filter_date}选股股票{stock_code}未来两天收益率：{increase:.2%}')
 
-        # 合并收益情况
-        buy_sell_profit_df = pd.concat(buy_sell_profit_df_list)
-        # 计算总收益
-        total_profit = buy_sell_profit_df['increase'].sum()
-        #增加一列保存总收益
-        buy_sell_profit_df['total_profit'] = total_profit
-        #保存选股日期后未来两天的收益情况
-        buy_sell_profit_df.to_csv(f'{filter_date}_buy_sell_profit.csv', index=False, mode='a')
+        # 将收益情况保存为 DataFrame
+        buy_sell_profit_df = pd.DataFrame(buy_sell_profit_df_dict_list)
+
+        # 添加总收益列，默认填充 NaN
+        buy_sell_profit_df['total_increase'] = pd.NA
+
+        # 只在最后一行填入总收益
+        buy_sell_profit_df.loc[buy_sell_profit_df.index[-1], 'total_increase'] = total_increase
+
         # 输出总收益
-        print(f'{filter_date}选股日期后未来两天的总收益率：{total_profit:.2%}')
+        print(f'{filter_date}选股组合总收益率：{total_increase:.2%}')
+
+        # 保存选股日期后未来两天的收益情况到 CSV 文件
+        buy_sell_profit_df.to_csv(f'buy_sell_result/{filter_date}_buy_sell_profit.csv', index=False)
+        # 输出总收益
+
         print(f'{filter_date}选股日期后未来两天的收益情况已保存！')
+    # 合并所有的买卖收益情况
+    get_buy_sell_result_combined()
 
